@@ -8,8 +8,8 @@ if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 try:
-    from projects.wal_checkpoint_streamer.streamer import WALStreamProcessor, SimulatedCrashException
-    from projects.wal_checkpoint_streamer.main import generate_sample_events, run_demo
+    from .streamer import WALStreamProcessor, SimulatedCrashException
+    from .main import generate_sample_events, run_demo
 except ImportError:
     from streamer import WALStreamProcessor, SimulatedCrashException
     from main import generate_sample_events, run_demo
@@ -92,3 +92,18 @@ def test_resume_after_crash(temp_db: Path):
 
 def test_demo_runner_integration(temp_db: Path):
     run_demo(temp_db, total_events=150, commit_interval=50, crash_at=85)
+
+
+def test_context_manager_and_validation(temp_db: Path):
+    items = generate_sample_events(20)
+    with WALStreamProcessor(temp_db) as proc:
+        with pytest.raises(ValueError, match="commit_interval must be > 0"):
+            proc.process_stream("s_err", items, commit_interval=0)
+        with pytest.raises(ValueError, match="commit_interval must be > 0"):
+            proc.process_stream("s_err", items, commit_interval=-5)
+
+        dup_items = [{"id": "dup_1", "v": 1}, {"id": "dup_1", "v": 2}, {"id": "dup_2", "v": 3}]
+        proc.process_stream("s_dup", dup_items, commit_interval=10)
+        assert proc.get_processed_records_count("s_dup") == 2
+        row = proc.conn.execute("SELECT total_items_processed FROM stream_checkpoints WHERE stream_id = 's_dup';").fetchone()
+        assert row["total_items_processed"] == 2

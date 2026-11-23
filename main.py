@@ -37,50 +37,46 @@ def run_demo(db_path: Path, total_events: int = 500, commit_interval: int = 100,
 
     # Phase 1: Start streaming and inject simulated crash
     print("[Phase 1] Starting initial streaming worker...")
-    processor = WALStreamProcessor(db_path)
-    print(f"  SQLite Journal Mode: {processor.get_journal_mode().upper()}")
-
     crashed = False
-    try:
-        processor.process_stream(
-            stream_id=stream_id,
-            items=events,
-            commit_interval=commit_interval,
-            crash_at=crash_at,
-        )
-    except SimulatedCrashException as e:
-        crashed = True
-        print(f"  [CRASH DETECTED] {e}")
-
-    processor.close()
+    with WALStreamProcessor(db_path) as processor:
+        print(f"  SQLite Journal Mode: {processor.get_journal_mode().upper()}")
+        try:
+            processor.process_stream(
+                stream_id=stream_id,
+                items=events,
+                commit_interval=commit_interval,
+                crash_at=crash_at,
+            )
+        except SimulatedCrashException as e:
+            crashed = True
+            print(f"  [CRASH DETECTED] {e}")
 
     assert crashed, "Expected simulated crash to occur!"
 
     # Phase 2: Inspect checkpoint and database state post-crash
     print("\n[Phase 2] Verifying checkpoint consistency post-crash...")
-    verifier = WALStreamProcessor(db_path)
-    saved_offset = verifier.get_checkpoint(stream_id)
-    saved_records = verifier.get_processed_records_count(stream_id)
-    print(f"  Persisted Checkpoint Offset: {saved_offset}")
-    print(f"  Persisted Committed Records: {saved_records}")
+    with WALStreamProcessor(db_path) as verifier:
+        saved_offset = verifier.get_checkpoint(stream_id)
+        saved_records = verifier.get_processed_records_count(stream_id)
+        print(f"  Persisted Checkpoint Offset: {saved_offset}")
+        print(f"  Persisted Committed Records: {saved_records}")
 
-    expected_clean_offset = (crash_at // commit_interval) * commit_interval
-    assert saved_offset == expected_clean_offset, f"Expected checkpoint {expected_clean_offset}, got {saved_offset}"
-    assert saved_records == expected_clean_offset, f"Expected {expected_clean_offset} records, got {saved_records}"
-    print(f"  -> Atomic rollback verified: exactly {saved_offset} records preserved (0 dirty uncommitted records)")
+        expected_clean_offset = (crash_at // commit_interval) * commit_interval
+        assert saved_offset == expected_clean_offset, f"Expected checkpoint {expected_clean_offset}, got {saved_offset}"
+        assert saved_records == expected_clean_offset, f"Expected {expected_clean_offset} records, got {saved_records}"
+        print(f"  -> Atomic rollback verified: exactly {saved_offset} records preserved (0 dirty uncommitted records)")
 
-    # Phase 3: Resume streaming worker from checkpoint
-    print("\n[Phase 3] Resuming streaming worker from checkpoint...")
-    result = verifier.process_stream(
-        stream_id=stream_id,
-        items=events,
-        commit_interval=commit_interval,
-        crash_at=None,  # No crash on resume
-    )
+        # Phase 3: Resume streaming worker from checkpoint
+        print("\n[Phase 3] Resuming streaming worker from checkpoint...")
+        result = verifier.process_stream(
+            stream_id=stream_id,
+            items=events,
+            commit_interval=commit_interval,
+            crash_at=None,  # No crash on resume
+        )
 
-    final_offset = verifier.get_checkpoint(stream_id)
-    final_records = verifier.get_processed_records_count(stream_id)
-    verifier.close()
+        final_offset = verifier.get_checkpoint(stream_id)
+        final_records = verifier.get_processed_records_count(stream_id)
 
     print(f"  Resumed from Offset: {result['resumed_from']}")
     print(f"  Processed on Resume: {result['processed_in_run']}")
@@ -97,6 +93,7 @@ def main():
     parser.add_argument("--count", type=int, default=500, help="Number of stream items (default 500)")
     parser.add_argument("--batch-size", type=int, default=100, help="Commit batch interval (default 100)")
     parser.add_argument("--crash-at", type=int, default=250, help="Offset to inject crash (default 250)")
+    parser.add_argument("--simulate-crash", action="store_true", help="Run default crash resilience simulation")
     args = parser.parse_args()
 
     if args.db:

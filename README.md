@@ -5,7 +5,7 @@
 [![Tests Passing](https://img.shields.io/badge/Tests-Passing-brightgreen.svg)](test_streamer.py)
 [![License: MIT](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 
-A high-concurrency batch processing and data streaming worker pool built for crash resilience. Implements SQLite Write-Ahead Logging (WAL) for atomic checkpointing, dynamic `(CPU_COUNT - 1)` worker pool scaling, and bounded 4MB chunk streaming with an $O(1)$ memory ceiling.
+A batch processing and data streaming processor built for crash resilience. Implements SQLite Write-Ahead Logging (WAL) for atomic batch checkpointing, transactional rollback on mid-batch failures, and deterministic offset resumption.
 
 ---
 
@@ -25,15 +25,15 @@ A high-concurrency batch processing and data streaming worker pool built for cra
                    ┌─────────────────────┴─────────────────────┐
                    ▼                                           ▼
        ┌───────────────────────┐                   ┌───────────────────────┐
-       │ CPU-1 Multiprocessing │                   │   Bounded 4MB Stream  │
-       │ Hardware-Aware Workers│                   │   O(1) Memory Ceiling │
+       │   Batch Transactions  │                   │   Idempotent Records  │
+       │  Configurable Commit  │                   │   INSERT OR REPLACE   │
        └───────────┬───────────┘                   └───────────┬───────────┘
                    │                                           │
                    └─────────────────────┬─────────────────────┘
                                          ▼
                       ┌──────────────────────────────────────┐
-                      │    Simulated Hardware Crash/Kill     │
-                      │ SIGINT Handled · Checkpoint Persisted│
+                      │    Simulated Worker Crash/Failure    │
+                      │  Atomic Rollback · Offset Persisted  │
                       └──────────────────┬───────────────────┘
                                          │
                                          ▼
@@ -47,10 +47,10 @@ A high-concurrency batch processing and data streaming worker pool built for cra
 
 ## Key Capabilities
 
-- **SQLite WAL Journaling**: Atomic transaction commits preventing state corruption during unexpected host crashes or terminations.
-- **Hardware-Aware Worker Scaling**: Automatically tunes worker process pools to `max(1, cpu_count() - 1)` to saturate bandwidth without starving system resources.
-- **Bounded Memory Footprint**: Streams data in fixed binary chunks (4MB default) maintaining a constant $O(1)$ memory footprint regardless of dataset scale.
-- **Deterministic Crash Resume**: Unprocessed offsets are tracked in real-time, allowing interrupted pipelines to resume instantly with zero duplicated work.
+- **SQLite WAL Journaling**: Atomic transaction commits preventing state corruption during unexpected crashes or exceptions.
+- **Configurable Batch Commits**: Commits records and checkpoint offsets together in single atomic SQLite transactions at configurable `commit_interval` boundaries.
+- **Idempotent Record Ingestion**: Deduplicates repeated record IDs via `INSERT OR REPLACE` while tracking unique processed record counts.
+- **Deterministic Crash Resume**: Unprocessed offsets are tracked in `stream_checkpoints`, allowing interrupted runs to resume from the last committed batch boundary with zero duplicated work.
 
 ---
 
@@ -78,7 +78,7 @@ Watch the pipeline process items, simulate a mid-batch kill, and instantaneously
 pytest test_streamer.py -v
 ```
 
-5 unit tests validate WAL journal configuration, atomic offset updates, crash recovery simulation, and worker pool scaling.
+Unit tests validate WAL journal configuration, atomic offset updates, crash recovery simulation, and context-managed resource cleanup.
 
 ---
 

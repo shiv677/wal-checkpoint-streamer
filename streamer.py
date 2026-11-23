@@ -66,6 +66,8 @@ class WALStreamProcessor:
         crash_at: int | None = None,
     ) -> dict[str, Any]:
         """Processes items from the stream starting from the last saved checkpoint."""
+        if commit_interval <= 0:
+            raise ValueError("commit_interval must be > 0")
         current_offset = self.get_checkpoint(stream_id)
         if current_offset >= len(items):
             return {
@@ -103,14 +105,16 @@ class WALStreamProcessor:
                     """, (record_id, stream_id, global_offset, payload_json))
 
                 new_offset = batch_end
+                cursor.execute("SELECT COUNT(*) FROM processed_records WHERE stream_id = ?;", (stream_id,))
+                unique_processed = cursor.fetchone()[0]
                 cursor.execute("""
                     INSERT INTO stream_checkpoints (stream_id, last_offset, total_items_processed)
                     VALUES (?, ?, ?)
                     ON CONFLICT(stream_id) DO UPDATE SET
                         last_offset = excluded.last_offset,
-                        total_items_processed = total_items_processed + ?,
+                        total_items_processed = excluded.total_items_processed,
                         last_checkpoint_at = CURRENT_TIMESTAMP;
-                """, (stream_id, new_offset, len(batch), len(batch)))
+                """, (stream_id, new_offset, unique_processed))
 
                 processed_in_run += len(batch)
 
@@ -130,3 +134,10 @@ class WALStreamProcessor:
 
     def close(self):
         self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+        return False
